@@ -1,6 +1,6 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.3.0';
+const BUILD_ID = '1.4.0';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
 const PREVIEW_ID = 'cob-preview';
@@ -23,6 +23,8 @@ const defaultSettings = {
     showLabels: true,
     /** Add a keyboard button that manually un-hides the message bar. */
     showKeyboardButton: false,
+    /** Number keys (1-9, 0 = 10) trigger the matching option while the bar is visible. */
+    keyboardSelection: true,
 };
 
 /** @type {object|null} */
@@ -366,16 +368,39 @@ function doStop() {
     }
 }
 
+/** Temporarily un-hide the core form while a core popup anchored inside it is
+ *  open, then restore the hidden state once the popup closes. */
+function withVisibleForm(action, popupId) {
+    document.body.classList.remove('cob-hide-input');
+    action();
+    const popup = document.getElementById(popupId);
+    if (!popup) {
+        applyInputVisibility();
+        return;
+    }
+    let tries = 0;
+    const watcher = setInterval(() => {
+        if (!$(popup).is(':visible') || ++tries > 300) { // ~2 min safety cap
+            clearInterval(watcher);
+            applyInputVisibility();
+        }
+    }, 400);
+}
+
 function openOptionsMenu() {
     const button = document.getElementById('options_button');
     if (!button) return;
-    // Core script.js closes the options popup on any document click unless the
-    // button or popup is :hover/:focus (isMouseOverButtonOrMenu). A synthetic
-    // click has neither — the pointer rests on OUR button — so the popup opened
-    // and the very same click immediately closed it. Focus the real button first.
-    if (!button.hasAttribute('tabindex')) button.setAttribute('tabindex', '-1');
-    button.focus({ preventScroll: true });
-    nativeClick(button);
+    // Two traps when delegating this click: (1) core closes the popup on any
+    // document click unless the button is :hover/:focus (isMouseOverButtonOrMenu
+    // in script.js) — a synthetic click has neither, since the pointer rests on
+    // OUR button; (2) while cob-hide-input is active the real button lives in a
+    // visibility:hidden subtree and cannot take focus at all. So: un-hide the
+    // form while the popup is open, focus the button, then click it for real.
+    withVisibleForm(() => {
+        if (!button.hasAttribute('tabindex')) button.setAttribute('tabindex', '-1');
+        button.focus({ preventScroll: true });
+        nativeClick(button);
+    }, 'options');
 }
 
 function openExtensionsMenu() {
@@ -553,7 +578,10 @@ function renderBar() {
 function applyInputVisibility() {
     const settings = getSettings();
     const barVisible = !!barEl && !barEl.classList.contains('cob-hidden') && currentOptions.length > 0;
-    const shouldHide = settings.enabled && settings.hideInput && barVisible && !manualInputVisible;
+    // Never hide the form while the core options popup is open — its Popper
+    // anchor (the real burger) lives inside the form.
+    const optionsPopupOpen = !!document.getElementById('options') && $('#options').is(':visible');
+    const shouldHide = settings.enabled && settings.hideInput && barVisible && !manualInputVisible && !optionsPopupOpen;
     document.body.classList.toggle('cob-hide-input', shouldHide);
 }
 
@@ -638,6 +666,10 @@ function buildSettingsPanel() {
                     <input id="cob_keyboard_button" type="checkbox" ${settings.showKeyboardButton ? 'checked' : ''} />
                     <span>Add a keyboard button that un-hides the message bar</span>
                 </label>
+                <label class="checkbox_label" for="cob_keyboard_selection">
+                    <input id="cob_keyboard_selection" type="checkbox" ${settings.keyboardSelection ? 'checked' : ''} />
+                    <span>Number keys select options (1-9, 0 = 10)</span>
+                </label>
                 <label for="cob_send_template">Message sent when an option is tapped</label>
                 <input id="cob_send_template" class="text_pole" type="text" />
                 <small>Placeholders: <code>{{number}}</code>, <code>{{label}}</code> (short title), <code>{{text}}</code> (full option text).</small>
@@ -662,6 +694,7 @@ function buildSettingsPanel() {
         persistSettings();
         scheduleRefresh();
     });
+    $('#cob_keyboard_selection').on('change', function () { getSettings().keyboardSelection = this.checked; persistSettings(); });
     $('#cob_send_template').on('input', function () { getSettings().sendTemplate = String($(this).val()); persistSettings(); });
     $('#cob_min_options').on('change', function () { getSettings().minOptions = Number($(this).val()) || 2; persistSettings(); scheduleRefresh(); });
 }
@@ -706,6 +739,21 @@ function wireEvents() {
     document.addEventListener('pointerdown', (e) => {
         if (!e.target.closest?.(`#${PREVIEW_ID}`)) hidePreview();
     }, true);
+
+    // Number keys trigger the matching option (1-9, 0 = option 10).
+    document.addEventListener('keydown', (e) => {
+        if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+        if (!/^[0-9]$/.test(e.key)) return;
+        if (generating || !getSettings().keyboardSelection) return;
+        if (!barEl || barEl.classList.contains('cob-hidden') || !currentOptions.length) return;
+        // Never steal digits from an editable field.
+        if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+        const num = e.key === '0' ? 10 : Number(e.key);
+        const option = currentOptions.find(o => o.number === num);
+        if (!option) return;
+        e.preventDefault();
+        sendChoice(option);
+    });
 }
 
 async function init() {

@@ -1,6 +1,6 @@
 /* Adventure Choice Buttons — build tag lets debug tooling prove which stylesheet version is applied. */
 :root {
-    --cob-build: '1.3.0';
+    --cob-build: '1.4.0';
 }
 
 /* The docked button bar. Lives in flow inside #form_sheld (the bottom block of
@@ -114,11 +114,24 @@
 }
 
 /* Hides the core message bar while choices are on screen. visibility (not
-   display) keeps the layout box, so the Options/Extensions popups that are
-   anchored to buttons inside #send_form still open in the right place, and
-   the hidden textarea can never be tapped, so the mobile keyboard never pops. */
+   display) plus a collapsed box: the hidden textarea can never be tapped (so
+   the mobile keyboard never pops), the dead space under the bar is reclaimed,
+   and the extension un-hides the form while a core popup anchored inside it
+   (options menu) is open, so Popper always has a real anchor. */
 body.cob-hide-input #send_form {
     visibility: hidden;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-width: 0 !important;
+    overflow: hidden !important;
+}
+
+/* #chat's max-height reserves space for a one-row form; with the form
+   collapsed, let the flex layout give that space back to the chat. */
+body.cob-hide-input #chat {
+    max-height: none;
 }
 
 /* Long-press preview bubble showing the full option text before sending. */
