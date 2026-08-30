@@ -57,21 +57,33 @@ and docks a full-width button bar where the message input normally sits.
 
 ## Install / deploy
 
-Same flow as `adventure-launcher`:
+Repository: <https://github.com/owlket/adventure-choice-buttons> (private).
+
+### Deploy from GitHub
+
+On any machine with the repo cloned:
+
+```bash
+git clone https://github.com/owlket/adventure-choice-buttons.git
+```
+
+Then deploy the extension files to SillyTavern (from a clone of this repo):
+
+**Local SillyTavern (from the workspace):**
 
 ```powershell
 .\plugins\adventure-choice-buttons\deploy-extension.ps1
 ```
 
-For the production Docker host (`root@10.10.10.124`, SillyTavern at
-`/opt/sillytavern/`), copy files INTO the existing bind-mounted extension
-directory — do not `rm -rf` the directory itself (see the adventure-launcher
-README for why):
+**Production Docker host** (`root@10.10.10.124`, SillyTavern at
+`/opt/sillytavern/`) — run from the repo root, and copy files INTO the existing
+bind-mounted extension directory — do not `rm -rf` the directory itself (see
+the adventure-launcher README for why):
 
 ```bash
-scp plugins/adventure-choice-buttons/extension/index.js \
-    plugins/adventure-choice-buttons/extension/manifest.json \
-    plugins/adventure-choice-buttons/extension/style.css \
+git clone https://github.com/owlket/adventure-choice-buttons.git
+cd adventure-choice-buttons
+scp extension/index.js extension/manifest.json extension/style.css \
     root@10.10.10.124:/opt/sillytavern/public/extensions/adventure-choice-buttons/
 ```
 
