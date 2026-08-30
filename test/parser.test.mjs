@@ -167,6 +167,38 @@ const msgNarrativeImage = `1. **Run** -- fast.\n2. **Hide** -- quietly.\n\nYou s
 check('narrative + image without prompt ignored', parseChoices(msgNarrativeImage, 2).length, 0);
 check('narrative + image tolerated while streaming', parseChoices(msgNarrativeImage, 2, true).length, 2);
 
+// --- Case 18: Chinese world with trailing stat-tracker line after an HR ---
+// (Reported: Chinese worlds never/semi detected — the "理智 76/100 · 楼层 7 · 回合 5/150"
+// status line after the list made the strict trailing check fail once generation ended.)
+const msgCn = `门下面那股洗衣液的味道还在往上升。温暖的，舒适的。
+
+**你要怎么做?**
+
+1. **下楼** — 打开六楼的门，进入楼层。
+2. **对抗** — 用意志力抵抗那个气味的引诱，交换信息。
+3. **压制** — 坚决无视那个气味，问林暮更实际的问题。
+4. **等待** — 等气味消散再行动。
+5. **警惕** — 质疑林暮：她为什么会知道"它在喂你"这个机制？
+6. **自由输入**
+
+---
+
+*理智 76/100 · 楼层 7（楼梯间） · 发现的客人 0 · 回合 5/150*`;
+
+const r18 = parseChoices(msgCn, 2);
+check('status line after HR: 6 options detected', r18.length, 6);
+check('status line: option 1 label', r18[0]?.label, '下楼');
+check('status line not in last option text', r18[5]?.text.includes('理智'), false);
+
+// --- Case 19: narrative after list + status line, no prompt -> still rejected (strict) ---
+const msgCnStrict = `1. **走** — 快。\n2. **留** — 静。\n\n你转身离开，没有再回头。\n\n---\n\n*理智 76/100 · 楼层 7 · 回合 5/150*`;
+check('narrative + status line without prompt ignored', parseChoices(msgCnStrict, 2).length, 0);
+
+// --- Case 20: user-configured regex marks a custom status line ---
+const msgCustomStatus = `1. **A** -- one.\n2. **B** -- two.\n\n【状态】心情：平静，第 3 天`;
+check('custom status line rejected without regex', parseChoices(msgCustomStatus, 2).length, 0);
+check('custom status line accepted via user regex', parseChoices(msgCustomStatus, 2, false, /^【状态】/).length, 2);
+
 // --- Case 17: media-only detection (generated image messages) ---
 check('markdown image is media-only', isMediaOnlyText('![generated](user/images/foo.png)'), true);
 check('html image is media-only', isMediaOnlyText('<img src="user/images/foo.png" alt="">'), true);

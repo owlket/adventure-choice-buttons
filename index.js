@@ -1,6 +1,6 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.4.0';
+const BUILD_ID = '1.5.0';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
 const PREVIEW_ID = 'cob-preview';
@@ -25,6 +25,8 @@ const defaultSettings = {
     showKeyboardButton: false,
     /** Number keys (1-9, 0 = 10) trigger the matching option while the bar is visible. */
     keyboardSelection: true,
+    /** Optional regex marking extra trailing status lines to ignore after the list (e.g. "^理智 .*回合"). */
+    trailingStatusPattern: '',
 };
 
 /** @type {object|null} */
@@ -168,9 +170,23 @@ const MEDIA_LINE_RE = /^(?:\s*(?:!\[[^\]]*\]\([^)]*\)|<img\b[^>]*>)\s*)+$/i;
 /** A bracketed directive line such as [SCENE_CHANGE] that media hooks leave after the list. */
 const DIRECTIVE_RE = /^\s*\[[^\]\n]{1,60}\]\s*$/;
 
+/**
+ * A trailing status line injected by stat trackers, e.g.
+ * "*理智 76/100 · 楼层 7（楼梯间） · 发现的客人 0 · 回合 5/150*":
+ * a single line holding N/N counters separated by ·/|/•/│.
+ * An optional user-supplied regex (setting) can mark extra formats.
+ */
+function isStatusLine(line, statusRe = null) {
+    const t = line.trim().replace(/^[*_(]+|[*_)\s]+$/g, '').trim();
+    if (!t) return false;
+    if (statusRe && statusRe.test(t)) return true;
+    const separators = (t.match(/[·|•│]/g) || []).length;
+    return separators >= 2 && /\d+\s*\/\s*\d+/.test(t);
+}
+
 /** Lines that never count as narration when deciding what follows the option run. */
-function isSkippableLine(line) {
-    return line.trim() === '' || HR_RE.test(line) || MEDIA_LINE_RE.test(line) || DIRECTIVE_RE.test(line);
+function isSkippableLine(line, statusRe = null) {
+    return line.trim() === '' || HR_RE.test(line) || MEDIA_LINE_RE.test(line) || DIRECTIVE_RE.test(line) || isStatusLine(line, statusRe);
 }
 
 /** Strip markdown inline formatting so button labels and sent text stay clean. */
@@ -210,16 +226,17 @@ function extractLabel(text) {
  * @param {string} raw Raw message text (markdown).
  * @param {number} minOptions
  * @param {boolean} [allowTrailingNarrative] True while a generation is streaming.
+ * @param {RegExp|null} [statusRe] User-configured regex marking extra trailing status lines.
  * @returns {Array<{number: number, label: string, text: string}>}
  */
-function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
+function parseChoices(raw, minOptions, allowTrailingNarrative = false, statusRe = null) {
     if (!raw) return [];
     const lines = String(raw).split(/\r?\n/);
 
     // Index of the last meaningful line (media/directive lines don't count —
     // an image generated from [SCENE_CHANGE] may be appended after the list).
     let end = lines.length - 1;
-    while (end >= 0 && isSkippableLine(lines[end])) end--;
+    while (end >= 0 && isSkippableLine(lines[end], statusRe)) end--;
     if (end < 0) return [];
 
     // All numbered item starts up to `end`.
@@ -247,8 +264,8 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
         let continuation = 0;
         for (let k = start.idx + 1; k < stopIdx; k++) {
             const t = lines[k].trim();
-            // A blank/rule/media/directive line ends the item — content after a gap is not part of the option.
-            if (isSkippableLine(lines[k])) break;
+            // A blank/rule/media/directive/status line ends the item — content after a gap is not part of the option.
+            if (isSkippableLine(lines[k], statusRe)) break;
             // Don't swallow a trailing "What do you do?" into the last option.
             if (PROMPT_LINE_RE.test(t)) break;
             // A runaway paragraph means this probably wasn't a choice list.
@@ -268,7 +285,7 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
     let sawNarrative = false;
     for (let k = lastContentLine + 1; k <= end; k++) {
         const t = lines[k].trim();
-        if (isSkippableLine(lines[k]) || PROMPT_LINE_RE.test(t)) continue;
+        if (isSkippableLine(lines[k], statusRe) || PROMPT_LINE_RE.test(t)) continue;
         sawNarrative = true;
     }
     if (sawNarrative && !allowTrailingNarrative && !PROMPT_LINE_RE.test(lines[end].trim())) return [];
@@ -387,19 +404,32 @@ function withVisibleForm(action, popupId) {
     }, 400);
 }
 
+/** True while WE hold the options popup open (core's own visibility flag only
+ *  tracks its own clicks, so its outside-click closer doesn't run for us). */
+let optionsMenuSelfManaged = false;
+
 function openOptionsMenu() {
-    const button = document.getElementById('options_button');
-    if (!button) return;
-    // Two traps when delegating this click: (1) core closes the popup on any
-    // document click unless the button is :hover/:focus (isMouseOverButtonOrMenu
-    // in script.js) — a synthetic click has neither, since the pointer rests on
-    // OUR button; (2) while cob-hide-input is active the real button lives in a
-    // visibility:hidden subtree and cannot take focus at all. So: un-hide the
-    // form while the popup is open, focus the button, then click it for real.
+    const menu = document.getElementById('options');
+    if (!menu) return;
     withVisibleForm(() => {
-        if (!button.hasAttribute('tabindex')) button.setAttribute('tabindex', '-1');
-        button.focus({ preventScroll: true });
-        nativeClick(button);
+        const $menu = $(menu);
+        if ($menu.is(':visible')) {
+            $menu.stop(true, true).fadeOut(150);
+            optionsMenuSelfManaged = false;
+            return;
+        }
+        // Show the popup directly instead of delegating a click to the core
+        // burger: core closes it on any document click unless the real button
+        // is :hover/:focus (isMouseOverButtonOrMenu), which a synthetic click
+        // can never satisfy — the pointer rests on OUR button, and while the
+        // form is hidden the real button cannot take focus either. We manage
+        // outside-click closing ourselves (see wireEvents). Item clicks inside
+        // the popup still run core's handlers as usual.
+        $menu.stop(true, true).fadeIn(150);
+        optionsMenuSelfManaged = true;
+        // Core's Popper instance re-anchors on window resize — nudge it so the
+        // popup tracks the (just un-hidden) burger button.
+        window.dispatchEvent(new Event('resize'));
     }, 'options');
 }
 
@@ -585,6 +615,18 @@ function applyInputVisibility() {
     document.body.classList.toggle('cob-hide-input', shouldHide);
 }
 
+/** Compile the user's trailing-status-line regex; null when unset/invalid. */
+function getStatusLineRe() {
+    const pattern = String(getSettings().trailingStatusPattern || '').trim();
+    if (!pattern) return null;
+    try {
+        return new RegExp(pattern, 'i');
+    } catch {
+        console.warn(`[${MODULE_NAME}] Invalid trailingStatusPattern regex:`, pattern);
+        return null;
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 /* Refresh                                                                   */
 /* ------------------------------------------------------------------------- */
@@ -603,7 +645,7 @@ function refresh() {
     const raw = getLastChoiceSourceText();
     // While streaming, keep the bar up even if narrative currently trails the
     // list — the closing "what do you do?" prompt may not have arrived yet.
-    currentOptions = raw ? parseChoices(raw, Math.max(2, Number(settings.minOptions) || 2), generating) : [];
+    currentOptions = raw ? parseChoices(raw, Math.max(2, Number(settings.minOptions) || 2), generating, getStatusLineRe()) : [];
 
     const bar = ensureBar();
     if (!currentOptions.length) {
@@ -675,6 +717,10 @@ function buildSettingsPanel() {
                 <small>Placeholders: <code>{{number}}</code>, <code>{{label}}</code> (short title), <code>{{text}}</code> (full option text).</small>
                 <label for="cob_min_options">Minimum options needed to show the bar</label>
                 <input id="cob_min_options" type="number" min="2" max="12" step="1" />
+                <label for="cob_status_pattern">Trailing status-line pattern (regex, optional)</label>
+                <input id="cob_status_pattern" class="text_pole" type="text" placeholder="e.g. ^理智 .*回合" />
+                <small>Lines matching this after the option list are ignored. A built-in heuristic already covers
+                    lines like <code>理智 76/100 · 楼层 7 · 回合 5/150</code> (N/N counters with ·/|/• separators).</small>
             </div>
         </div>
     </div>`;
@@ -697,6 +743,8 @@ function buildSettingsPanel() {
     $('#cob_keyboard_selection').on('change', function () { getSettings().keyboardSelection = this.checked; persistSettings(); });
     $('#cob_send_template').on('input', function () { getSettings().sendTemplate = String($(this).val()); persistSettings(); });
     $('#cob_min_options').on('change', function () { getSettings().minOptions = Number($(this).val()) || 2; persistSettings(); scheduleRefresh(); });
+    $('#cob_status_pattern').val(String(settings.trailingStatusPattern || ''));
+    $('#cob_status_pattern').on('input', function () { getSettings().trailingStatusPattern = String($(this).val()); persistSettings(); scheduleRefresh(); });
 }
 
 
@@ -738,6 +786,20 @@ function wireEvents() {
     // Any tap outside the long-press preview dismisses it.
     document.addEventListener('pointerdown', (e) => {
         if (!e.target.closest?.(`#${PREVIEW_ID}`)) hidePreview();
+    }, true);
+
+    // Outside tap closes a self-opened options popup (core's closer only runs
+    // when ITS flag is set, which showing the popup directly doesn't do).
+    document.addEventListener('pointerdown', (e) => {
+        if (!optionsMenuSelfManaged) return;
+        const menu = document.getElementById('options');
+        if (!menu || !$(menu).is(':visible')) {
+            optionsMenuSelfManaged = false;
+            return;
+        }
+        if (e.target.closest?.('#options') || e.target.closest?.('#cob-burger')) return;
+        $(menu).fadeOut(150);
+        optionsMenuSelfManaged = false;
     }, true);
 
     // Number keys trigger the matching option (1-9, 0 = option 10).

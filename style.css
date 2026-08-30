@@ -1,6 +1,6 @@
 /* Adventure Choice Buttons — build tag lets debug tooling prove which stylesheet version is applied. */
 :root {
-    --cob-build: '1.4.0';
+    --cob-build: '1.5.0';
 }
 
 /* The docked button bar. Lives in flow inside #form_sheld (the bottom block of
