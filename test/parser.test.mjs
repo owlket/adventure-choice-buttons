@@ -5,12 +5,12 @@ import { readFileSync } from 'node:fs';
 
 const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const start = src.indexOf('const ITEM_RE');
-const end = src.indexOf('/** Raw text of the last assistant message');
+const end = src.indexOf('/** Text of the most recent message that can carry choices');
 if (start < 0 || end < 0) throw new Error('Could not locate parser section in index.js');
 const section = src.slice(start, end);
 
-const factory = new Function(`const MAX_OPTIONS = 12;\n${section}\nreturn { parseChoices, extractLabel, cleanInline };`);
-const { parseChoices } = factory();
+const factory = new Function(`const MAX_OPTIONS = 12;\n${section}\nreturn { parseChoices, extractLabel, cleanInline, isMediaOnlyText };`);
+const { parseChoices, isMediaOnlyText } = factory();
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -101,6 +101,54 @@ check('last option not polluted by prompt line', r7[1]?.text.includes('What do y
 
 // --- Case 8: non-sequential numbering -> ignored ---
 check('non-sequential ignored', parseChoices('1. A\n3. B\n4. C', 2).length, 0);
+
+// --- Case 9: list followed by epilogue narration, message still ends asking for a choice ---
+// (This is the reported bug: the bar flashed when option 6 streamed in, then vanished
+// once the closing narration + prompt lines arrived after the list.)
+const msgEpilogue = `**Select an action:**
+
+1. **Visit the holding cell** -- observe the anomaly directly.
+2. **Review the debrief transcripts** -- dig into the language used.
+3. **Submit Classification** The briefing room hums in the quiet after Vasquez's question.
+
+The air recyclers click through their cycle. Somewhere below your feet, something is waiting.
+
+What do you do?
+
+(Select 1-3, or describe your own action.)`;
+
+const r9 = parseChoices(msgEpilogue, 2);
+check('epilogue + prompt ending: options detected', r9.length, 3);
+check('epilogue: last label intact', r9[2]?.label, 'Submit Classification');
+check('epilogue not swallowed into last option', r9[2]?.text.includes('air recyclers'), false);
+
+// --- Case 10: same shape but message ends with narration -> still ignored (strict mode) ---
+const msgEpilogueNoPrompt = `Pick one:
+1. **Run** -- fast.
+2. **Hide** -- quietly.
+
+The ground trembles beneath your feet and everything changes.`;
+check('epilogue without prompt ending ignored', parseChoices(msgEpilogueNoPrompt, 2).length, 0);
+
+// --- Case 11: streaming mode keeps the bar while the closing prompt has not arrived yet ---
+check('streaming: trailing narration tolerated', parseChoices(msgEpilogueNoPrompt, 2, true).length, 2);
+check('streaming: mid-message list also tolerated', parseChoices(msgMid, 2, true).length, 2);
+
+// --- Case 12: parenthesized prompt line counts as a prompt ---
+check('"(Select 1-6, ...)" is a prompt line', PROMPT_LINE_RE_TEST(), true);
+function PROMPT_LINE_RE_TEST() {
+    // Re-derive from the sliced section: parseChoices behavior is the observable surface.
+    const msg = '1. **A** -- one.\n2. **B** -- two.\n\n(Select 1-2, or describe your own action.)';
+    return parseChoices(msg, 2).length === 2;
+}
+
+// --- Case 13: media-only detection (generated image messages) ---
+check('markdown image is media-only', isMediaOnlyText('![generated](user/images/foo.png)'), true);
+check('html image is media-only', isMediaOnlyText('<img src="user/images/foo.png" alt="">'), true);
+check('bare image URL is media-only', isMediaOnlyText('https://example.com/pic.webp'), true);
+check('empty text is media-only', isMediaOnlyText(''), true);
+check('caption + image is NOT media-only', isMediaOnlyText('Look at this: ![img](x.png)'), false);
+check('plain narration is NOT media-only', isMediaOnlyText('The door creaks open.'), false);
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} TEST(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

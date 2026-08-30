@@ -1,12 +1,14 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.0.0';
+const BUILD_ID = '1.1.0';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
 const SPACER_ID = 'cob-spacer';
 const PREVIEW_ID = 'cob-preview';
 const LONG_PRESS_MS = 500;
 const MAX_OPTIONS = 12;
+/** How many messages back to look for a choice-bearing message past media-only replies (generated images). */
+const MAX_MEDIA_LOOKBACK = 8;
 
 const defaultSettings = {
     enabled: true,
@@ -158,8 +160,8 @@ function persistSettings() {
 const ITEM_RE = /^\s{0,3}(?:[-*+]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
 /** Horizontal-rule-only lines are allowed after the option run. */
 const HR_RE = /^\s*([-*_]\s*){3,}$/;
-/** A line that reads like a fresh "what do you do?" prompt rather than option text. */
-const PROMPT_LINE_RE = /^\**\s*(select|choose|pick|what (do|will) you|your (move|choice|action|decision))\b/i;
+/** A line that reads like a fresh "what do you do?" prompt rather than option text. Leading emphasis/parens allowed ("(Select 1-6, ...)", "*What do you do?*"). */
+const PROMPT_LINE_RE = /^[*_(\s]*(?:select|choose|pick|what (?:do|will) you|your (?:move|choice|action|decision))\b/i;
 
 /** Strip markdown inline formatting so button labels and sent text stay clean. */
 function cleanInline(s) {
@@ -189,14 +191,18 @@ function extractLabel(text) {
 }
 
 /**
- * Parse the LAST trailing numbered list in a message (the "select an action" block).
- * The run must start at 1, be sequential, contain at least minOptions items,
- * and reach the end of the message (only blank/rule lines may follow).
+ * Parse the LAST numbered list in a message (the "select an action" block).
+ * The run must start at 1, be sequential, and contain at least minOptions items.
+ * After the run, only blank/rule/prompt lines may follow — OR narrative epilogue,
+ * but then the message must still end by asking for a choice (a prompt line such
+ * as "What do you do?" / "(Select 1-6, ...)"), or a generation must still be
+ * streaming (more text may be on its way, so we don't flicker the bar off).
  * @param {string} raw Raw message text (markdown).
  * @param {number} minOptions
+ * @param {boolean} [allowTrailingNarrative] True while a generation is streaming.
  * @returns {Array<{number: number, label: string, text: string}>}
  */
-function parseChoices(raw, minOptions) {
+function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
     if (!raw) return [];
     const lines = String(raw).split(/\r?\n/);
 
@@ -243,25 +249,48 @@ function parseChoices(raw, minOptions) {
         options.push({ number: start.num, label: extractLabel(parts[0]), text });
     }
 
-    // The run must be the final content of the message: after the last item,
-    // only blank/rule lines or a closing "what do you do?" prompt may follow.
+    // What follows the last item decides whether the run is really a choice list.
+    // Blank/rule/prompt lines are always fine. Narrative epilogue (the model
+    // wrapping up the scene after the list) is fine only when the message still
+    // ENDS by asking for a choice, or while streaming (the prompt may not have
+    // arrived yet — rejecting here is what made the bar flash and vanish).
+    let sawNarrative = false;
     for (let k = lastContentLine + 1; k <= end; k++) {
         const t = lines[k].trim();
         if (!t || HR_RE.test(lines[k]) || PROMPT_LINE_RE.test(t)) continue;
-        return [];
+        sawNarrative = true;
     }
+    if (sawNarrative && !allowTrailingNarrative && !PROMPT_LINE_RE.test(lines[end].trim())) return [];
     return options;
 }
 
-/** Raw text of the last assistant message (current swipe), or null if the last message is the user's/system's. */
-function getLastAssistantText() {
+/** True when a message carries no readable text — e.g. a generated image attached after a choice list. */
+function isMediaOnlyText(text) {
+    return String(text ?? '')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // markdown images
+        .replace(/<img\b[^>]*>/gi, '') // HTML image tags
+        .replace(/\bhttps?:\/\/\S+?\.(?:png|jpe?g|gif|webp|bmp|avif)(?:\?\S*)?/gi, '') // bare image URLs
+        .trim() === '';
+}
+
+/** Text of the most recent message that can carry choices (current swipe).
+ * Media-only replies (generated images with no readable text) are skipped so
+ * the bar survives a picture appended after the list; hitting a user message
+ * ends the search (the choice was already answered). */
+function getLastChoiceSourceText() {
     try {
         const ctx = typeof getContextFn === 'function' ? getContextFn() : null;
         const chat = ctx?.chat;
         if (!Array.isArray(chat) || !chat.length) return null;
-        const last = chat[chat.length - 1];
-        if (!last || last.is_user || last.is_system) return null;
-        return typeof last.mes === 'string' ? last.mes : null;
+        for (let i = chat.length - 1, depth = 0; i >= 0 && depth < MAX_MEDIA_LOOKBACK; i--, depth++) {
+            const msg = chat[i];
+            if (!msg) continue;
+            if (msg.is_user) return null;
+            const text = typeof msg.mes === 'string' ? msg.mes : '';
+            if (isMediaOnlyText(text)) continue; // generated picture / empty media message
+            return text;
+        }
+        return null;
     } catch (err) {
         console.warn(`[${MODULE_NAME}] Failed to read chat:`, err);
         return null;
@@ -538,8 +567,10 @@ function refresh() {
         return;
     }
 
-    const raw = getLastAssistantText();
-    currentOptions = raw ? parseChoices(raw, Math.max(2, Number(settings.minOptions) || 2)) : [];
+    const raw = getLastChoiceSourceText();
+    // While streaming, keep the bar up even if narrative currently trails the
+    // list — the closing "what do you do?" prompt may not have arrived yet.
+    currentOptions = raw ? parseChoices(raw, Math.max(2, Number(settings.minOptions) || 2), generating) : [];
 
     const bar = ensureBar();
     if (!currentOptions.length) {
