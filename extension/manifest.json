@@ -1,0 +1,11 @@
+{
+  "display_name": "Adventure Choice Buttons",
+  "loading_order": 90,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "AI Assistant",
+  "version": "1.0.0",
+  "homePage": ""
+}

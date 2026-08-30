@@ -1,0 +1,3 @@
+# Scratch / temp files
+_*.txt
+node_modules/

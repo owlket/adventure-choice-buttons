@@ -1,0 +1,162 @@
+/* Adventure Choice Buttons — build tag lets debug tooling prove which stylesheet version is applied. */
+:root {
+    --cob-build: '1.0.0';
+}
+
+/* The docked button bar. Position (left/width/bottom) is synced in JS to the
+   #send_form rect so it always matches the chat width on any screen. */
+#cob-bar {
+    position: fixed;
+    z-index: 40;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 6px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    background: rgba(18, 18, 24, 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px 12px 0 0;
+    color: var(--SmartThemeBodyColor, #eee);
+    font-family: var(--mainFontFamily, inherit);
+}
+
+#cob-bar.cob-hidden {
+    display: none;
+}
+
+/* Shared button base — sized for touch (min 44px targets). */
+.cob-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 46px;
+    padding: 6px 10px;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.07);
+    color: inherit;
+    font-size: 15px;
+    line-height: 1.2;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.12s ease, transform 0.06s ease;
+}
+
+.cob-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.cob-btn:active,
+.cob-btn.cob-pressed {
+    background: rgba(255, 255, 255, 0.22);
+    transform: scale(0.97);
+}
+
+.cob-btn.cob-disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+/* First two (burger, wand) and last two (continue, stop) stay square. */
+.cob-util {
+    flex: 0 0 auto;
+    width: 46px;
+    padding: 0;
+    font-size: 18px;
+}
+
+.cob-util.cob-stop:not(.cob-disabled) {
+    border-color: rgba(255, 120, 120, 0.55);
+    color: #ff9c9c;
+}
+
+/* Option buttons stretch so the row fills the chat width; they wrap onto
+   multiple full-width rows on narrow (mobile) screens. */
+.cob-opt {
+    flex: 1 1 140px;
+    justify-content: flex-start;
+    overflow: hidden;
+    text-align: left;
+}
+
+.cob-opt .cob-num {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.16);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.cob-opt .cob-label {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 14px;
+    opacity: 0.95;
+}
+
+/* Hides the core message bar while choices are on screen. visibility (not
+   display) keeps the layout box, so the Options/Extensions popups that are
+   anchored to buttons inside #send_form still open in the right place, and
+   the hidden textarea can never be tapped, so the mobile keyboard never pops. */
+body.cob-hide-input #send_form {
+    visibility: hidden;
+}
+
+/* Long-press preview bubble showing the full option text before sending. */
+#cob-preview {
+    position: fixed;
+    z-index: 10000;
+    max-width: min(92vw, 560px);
+    padding: 12px 14px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(24, 24, 32, 0.97);
+    color: var(--SmartThemeBodyColor, #eee);
+    font-size: 14px;
+    line-height: 1.45;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#cob-preview .cob-preview-hint {
+    margin-top: 8px;
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+/* Spacer appended at the end of #chat so the last message can scroll clear
+   of the bar when the bar is taller than the stock send form. */
+#cob-spacer {
+    flex: 0 0 auto;
+    width: 100%;
+    pointer-events: none;
+}
+
+@media screen and (max-width: 600px) {
+    #cob-bar {
+        gap: 5px;
+        padding: 5px 6px calc(5px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .cob-opt {
+        flex-basis: 45%;
+    }
+}
