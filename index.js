@@ -1,6 +1,6 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.5.0';
+const BUILD_ID = '1.5.1';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
 const PREVIEW_ID = 'cob-preview';
@@ -180,8 +180,11 @@ function isStatusLine(line, statusRe = null) {
     const t = line.trim().replace(/^[*_(]+|[*_)\s]+$/g, '').trim();
     if (!t) return false;
     if (statusRe && statusRe.test(t)) return true;
-    const separators = (t.match(/[·|•│]/g) || []).length;
-    return separators >= 2 && /\d+\s*\/\s*\d+/.test(t);
+    // Separators seen in stat trackers, including fullwidth/katakana variants.
+    const separators = (t.match(/[·|•│｜・]/g) || []).length;
+    if (separators < 2) return false;
+    // Counters: "76/100" ratios, or repeated "label: 12" pairs (either colon).
+    return /\d+\s*\/\s*\d+/.test(t) || (t.match(/[:：]\s*\d+/g) || []).length >= 2;
 }
 
 /** Lines that never count as narration when deciding what follows the option run. */
@@ -385,25 +388,6 @@ function doStop() {
     }
 }
 
-/** Temporarily un-hide the core form while a core popup anchored inside it is
- *  open, then restore the hidden state once the popup closes. */
-function withVisibleForm(action, popupId) {
-    document.body.classList.remove('cob-hide-input');
-    action();
-    const popup = document.getElementById(popupId);
-    if (!popup) {
-        applyInputVisibility();
-        return;
-    }
-    let tries = 0;
-    const watcher = setInterval(() => {
-        if (!$(popup).is(':visible') || ++tries > 300) { // ~2 min safety cap
-            clearInterval(watcher);
-            applyInputVisibility();
-        }
-    }, 400);
-}
-
 /** True while WE hold the options popup open (core's own visibility flag only
  *  tracks its own clicks, so its outside-click closer doesn't run for us). */
 let optionsMenuSelfManaged = false;
@@ -411,26 +395,23 @@ let optionsMenuSelfManaged = false;
 function openOptionsMenu() {
     const menu = document.getElementById('options');
     if (!menu) return;
-    withVisibleForm(() => {
-        const $menu = $(menu);
-        if ($menu.is(':visible')) {
-            $menu.stop(true, true).fadeOut(150);
-            optionsMenuSelfManaged = false;
-            return;
-        }
-        // Show the popup directly instead of delegating a click to the core
-        // burger: core closes it on any document click unless the real button
-        // is :hover/:focus (isMouseOverButtonOrMenu), which a synthetic click
-        // can never satisfy — the pointer rests on OUR button, and while the
-        // form is hidden the real button cannot take focus either. We manage
-        // outside-click closing ourselves (see wireEvents). Item clicks inside
-        // the popup still run core's handlers as usual.
-        $menu.stop(true, true).fadeIn(150);
-        optionsMenuSelfManaged = true;
-        // Core's Popper instance re-anchors on window resize — nudge it so the
-        // popup tracks the (just un-hidden) burger button.
-        window.dispatchEvent(new Event('resize'));
-    }, 'options');
+    const $menu = $(menu);
+    if ($menu.is(':visible')) {
+        $menu.stop(true, true).fadeOut(150);
+        optionsMenuSelfManaged = false;
+        return;
+    }
+    // Show the popup directly instead of delegating a click to the core burger:
+    // core closes it on any document click unless the real button is
+    // :hover/:focus (isMouseOverButtonOrMenu), which a synthetic click can never
+    // satisfy — the pointer rests on OUR button. We manage outside-click closing
+    // ourselves (see wireEvents). The form stays hidden: Popper anchors to the
+    // collapsed burger spot, which lands right above our bar. Item clicks inside
+    // the popup still run core's handlers as usual.
+    $menu.stop(true, true).fadeIn(150);
+    optionsMenuSelfManaged = true;
+    // Core's Popper instance re-anchors on window resize — nudge it.
+    window.dispatchEvent(new Event('resize'));
 }
 
 function openExtensionsMenu() {
@@ -646,6 +627,12 @@ function refresh() {
     // While streaming, keep the bar up even if narrative currently trails the
     // list — the closing "what do you do?" prompt may not have arrived yet.
     currentOptions = raw ? parseChoices(raw, Math.max(2, Number(settings.minOptions) || 2), generating, getStatusLineRe()) : [];
+
+    // Diagnostic: a numbered run exists but was rejected — log the message tail
+    // so users can report exactly what follows the list (open the console).
+    if (raw && !currentOptions.length && /^\s{0,3}\d{1,2}[.)]\s+\S/m.test(raw)) {
+        console.debug(`[${MODULE_NAME}] Choice-looking list was rejected. Message tail:`, JSON.stringify(raw.slice(-300)));
+    }
 
     const bar = ensureBar();
     if (!currentOptions.length) {

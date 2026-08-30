@@ -199,6 +199,12 @@ const msgCustomStatus = `1. **A** -- one.\n2. **B** -- two.\n\n【状态】心�
 check('custom status line rejected without regex', parseChoices(msgCustomStatus, 2).length, 0);
 check('custom status line accepted via user regex', parseChoices(msgCustomStatus, 2, false, /^【状态】/).length, 2);
 
+// --- Case 21: colon-style counters and fullwidth separators ---
+const msgColonStatus = `1. **A** -- one.\n2. **B** -- two.\n\n---\n\n理智：76 · 楼层：7 · 回合：5`;
+check('colon-counter status line skipped', parseChoices(msgColonStatus, 2).length, 2);
+const msgFullwidthSep = `1. **A** -- one.\n2. **B** -- two.\n\n理智 76/100 ｜ 楼层 7 ｜ 回合 5/150`;
+check('fullwidth-separator status line skipped', parseChoices(msgFullwidthSep, 2).length, 2);
+
 // --- Case 17: media-only detection (generated image messages) ---
 check('markdown image is media-only', isMediaOnlyText('![generated](user/images/foo.png)'), true);
 check('html image is media-only', isMediaOnlyText('<img src="user/images/foo.png" alt="">'), true);
