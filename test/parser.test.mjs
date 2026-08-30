@@ -3,7 +3,7 @@
 // Run from the workspace root:  node plugins/adventure-choice-buttons/test/parser.test.mjs
 import { readFileSync } from 'node:fs';
 
-const src = readFileSync(new URL('../extension/index.js', import.meta.url), 'utf8');
+const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const start = src.indexOf('const ITEM_RE');
 const end = src.indexOf('/** Raw text of the last assistant message');
 if (start < 0 || end < 0) throw new Error('Could not locate parser section in index.js');

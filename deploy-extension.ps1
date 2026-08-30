@@ -5,10 +5,13 @@
 $ErrorActionPreference = 'Stop'
 
 $pluginsRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$source = Join-Path $PSScriptRoot 'extension'
+$source = $PSScriptRoot
+$files = @('index.js', 'manifest.json', 'style.css')
 
-if (-not (Test-Path $source)) {
-    Write-Error "Extension source not found: $source"
+foreach ($file in $files) {
+    if (-not (Test-Path (Join-Path $source $file))) {
+        Write-Error "Extension source file not found: $(Join-Path $source $file)"
+    }
 }
 
 if ($env:DEPLOY_TARGET) {
@@ -50,6 +53,9 @@ if (-not (Test-Path $parent)) {
 if (Test-Path $destination) {
     Remove-Item -Path $destination -Recurse -Force
 }
+New-Item -ItemType Directory -Path $destination -Force | Out-Null
 
-Copy-Item -Path $source -Destination $destination -Recurse -Force
+foreach ($file in $files) {
+    Copy-Item -Path (Join-Path $source $file) -Destination (Join-Path $destination $file) -Force
+}
 Write-Output "Adventure Choice Buttons UI extension deployed to: $destination"

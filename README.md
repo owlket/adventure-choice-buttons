@@ -57,7 +57,16 @@ and docks a full-width button bar where the message input normally sits.
 
 ## Install / deploy
 
-Repository: <https://github.com/owlket/adventure-choice-buttons> (private).
+Repository: <https://github.com/owlket/adventure-choice-buttons>
+
+### Install from within SillyTavern
+
+The repo root follows the standard third-party extension layout
+(`manifest.json`, `index.js`, `style.css` at the top level), so SillyTavern's
+built-in installer works directly:
+
+Extensions drawer → **Install Extension** → paste
+`https://github.com/owlket/adventure-choice-buttons` → Install for all users.
 
 ### Deploy from GitHub
 
@@ -83,7 +92,7 @@ the adventure-launcher README for why):
 ```bash
 git clone https://github.com/owlket/adventure-choice-buttons.git
 cd adventure-choice-buttons
-scp extension/index.js extension/manifest.json extension/style.css \
+scp index.js manifest.json style.css \
     root@10.10.10.124:/opt/sillytavern/public/extensions/adventure-choice-buttons/
 ```
 
