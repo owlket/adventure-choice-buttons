@@ -1,13 +1,14 @@
 /* Adventure Choice Buttons — build tag lets debug tooling prove which stylesheet version is applied. */
 :root {
-    --cob-build: '1.0.0';
+    --cob-build: '1.2.0';
 }
 
 /* The docked button bar. Position (left/width/bottom) is synced in JS to the
    #send_form rect so it always matches the chat width on any screen. */
 #cob-bar {
     position: fixed;
-    z-index: 40;
+    /* Above the chat/send-form stacking contexts on mobile, below core popups. */
+    z-index: 1000;
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;

@@ -142,7 +142,32 @@ function PROMPT_LINE_RE_TEST() {
     return parseChoices(msg, 2).length === 2;
 }
 
-// --- Case 13: media-only detection (generated image messages) ---
+// --- Case 14: list followed by [SCENE_CHANGE] + generated image (image-gen hook output) ---
+// The reported "after an image gen the chat box reverts" case: media/directive lines
+// appended after the list must not kill the parse.
+const msgSceneImage = `The hall falls silent.
+
+1. **Approach the high table** -- address the headmaster directly.
+2. **Take the empty seat** -- blend in and listen.
+3. Write your own action.
+
+[SCENE_CHANGE]
+
+![generated scene](user/images/scene-1.png)`;
+const r14 = parseChoices(msgSceneImage, 2);
+check('directive + image after list: options detected', r14.length, 3);
+check('image not swallowed into last option', r14[2]?.text.includes('SCENE_CHANGE'), false);
+
+// --- Case 15: image line directly after the last item, no blank line ---
+const msgImageTight = `1. **Run** -- fast.\n2. **Hide** -- quietly.\n![img](x.png)`;
+check('tight image line after list: detected', parseChoices(msgImageTight, 2).length, 2);
+
+// --- Case 16: narrative after list + image, no closing prompt -> still ignored (strict) ---
+const msgNarrativeImage = `1. **Run** -- fast.\n2. **Hide** -- quietly.\n\nYou slip away into the dark.\n\n![img](x.png)`;
+check('narrative + image without prompt ignored', parseChoices(msgNarrativeImage, 2).length, 0);
+check('narrative + image tolerated while streaming', parseChoices(msgNarrativeImage, 2, true).length, 2);
+
+// --- Case 17: media-only detection (generated image messages) ---
 check('markdown image is media-only', isMediaOnlyText('![generated](user/images/foo.png)'), true);
 check('html image is media-only', isMediaOnlyText('<img src="user/images/foo.png" alt="">'), true);
 check('bare image URL is media-only', isMediaOnlyText('https://example.com/pic.webp'), true);

@@ -1,6 +1,6 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.1.0';
+const BUILD_ID = '1.2.0';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
 const SPACER_ID = 'cob-spacer';
@@ -162,6 +162,15 @@ const ITEM_RE = /^\s{0,3}(?:[-*+]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
 const HR_RE = /^\s*([-*_]\s*){3,}$/;
 /** A line that reads like a fresh "what do you do?" prompt rather than option text. Leading emphasis/parens allowed ("(Select 1-6, ...)", "*What do you do?*"). */
 const PROMPT_LINE_RE = /^[*_(\s]*(?:select|choose|pick|what (?:do|will) you|your (?:move|choice|action|decision))\b/i;
+/** A line that is only embedded media (image markdown / <img>), e.g. attached by an image-gen extension. */
+const MEDIA_LINE_RE = /^(?:\s*(?:!\[[^\]]*\]\([^)]*\)|<img\b[^>]*>)\s*)+$/i;
+/** A bracketed directive line such as [SCENE_CHANGE] that media hooks leave after the list. */
+const DIRECTIVE_RE = /^\s*\[[^\]\n]{1,60}\]\s*$/;
+
+/** Lines that never count as narration when deciding what follows the option run. */
+function isSkippableLine(line) {
+    return line.trim() === '' || HR_RE.test(line) || MEDIA_LINE_RE.test(line) || DIRECTIVE_RE.test(line);
+}
 
 /** Strip markdown inline formatting so button labels and sent text stay clean. */
 function cleanInline(s) {
@@ -206,9 +215,10 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
     if (!raw) return [];
     const lines = String(raw).split(/\r?\n/);
 
-    // Index of the last meaningful line.
+    // Index of the last meaningful line (media/directive lines don't count —
+    // an image generated from [SCENE_CHANGE] may be appended after the list).
     let end = lines.length - 1;
-    while (end >= 0 && (lines[end].trim() === '' || HR_RE.test(lines[end]))) end--;
+    while (end >= 0 && isSkippableLine(lines[end])) end--;
     if (end < 0) return [];
 
     // All numbered item starts up to `end`.
@@ -236,8 +246,8 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
         let continuation = 0;
         for (let k = start.idx + 1; k < stopIdx; k++) {
             const t = lines[k].trim();
-            // A blank/rule line ends the item — content after a gap is not part of the option.
-            if (!t || HR_RE.test(lines[k])) break;
+            // A blank/rule/media/directive line ends the item — content after a gap is not part of the option.
+            if (isSkippableLine(lines[k])) break;
             // Don't swallow a trailing "What do you do?" into the last option.
             if (PROMPT_LINE_RE.test(t)) break;
             // A runaway paragraph means this probably wasn't a choice list.
@@ -257,7 +267,7 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false) {
     let sawNarrative = false;
     for (let k = lastContentLine + 1; k <= end; k++) {
         const t = lines[k].trim();
-        if (!t || HR_RE.test(lines[k]) || PROMPT_LINE_RE.test(t)) continue;
+        if (isSkippableLine(lines[k]) || PROMPT_LINE_RE.test(t)) continue;
         sawNarrative = true;
     }
     if (sawNarrative && !allowTrailingNarrative && !PROMPT_LINE_RE.test(lines[end].trim())) return [];
@@ -301,6 +311,14 @@ function getLastChoiceSourceText() {
 /* Actions (all delegate to core UI/APIs so behavior matches stock buttons)  */
 /* ------------------------------------------------------------------------- */
 
+/** Click a core button exactly like a real user tap: a single native event.
+ *  jQuery .trigger('click') can double-fire delegated handlers (trigger() calls
+ *  the element's native click() after its own bubbling pass, re-dispatching the
+ *  event) — that made the Options panel open and instantly close. */
+function nativeClick(el) {
+    el?.click?.();
+}
+
 function renderSendTemplate(option) {
     const template = String(getSettings().sendTemplate || defaultSettings.sendTemplate);
     return template
@@ -321,7 +339,7 @@ function sendChoice(option) {
     }
     textarea.value = renderSendTemplate(option);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    $(sendButton).trigger('click');
+    nativeClick(sendButton);
 }
 
 /** Continue the last message (same as the core Continue option / /continue). */
@@ -329,7 +347,7 @@ function doContinue() {
     if (generating) return;
     const option = document.getElementById('option_continue');
     if (option) {
-        $(option).trigger('click');
+        nativeClick(option);
         return;
     }
     if (typeof Generate === 'function') {
@@ -341,7 +359,7 @@ function doContinue() {
 function doStop() {
     const stopButton = document.getElementById('mes_stop');
     if (stopButton && $(stopButton).is(':visible')) {
-        $(stopButton).trigger('click');
+        nativeClick(stopButton);
         return;
     }
     if (typeof stopGeneration === 'function') {
@@ -350,13 +368,11 @@ function doStop() {
 }
 
 function openOptionsMenu() {
-    const button = document.getElementById('options_button');
-    if (button) $(button).trigger('click');
+    nativeClick(document.getElementById('options_button'));
 }
 
 function openExtensionsMenu() {
-    const button = document.getElementById('extensionsMenuButton');
-    if (button) $(button).trigger('click');
+    nativeClick(document.getElementById('extensionsMenuButton'));
 }
 
 /* ------------------------------------------------------------------------- */
@@ -516,9 +532,17 @@ function syncBarGeometry() {
     const form = document.getElementById('send_form');
     if (!form) return;
     const rect = form.getBoundingClientRect();
+    // Mobile browsers: the layout viewport can be taller than the visible area
+    // (URL bar / gesture bar) while position:fixed is resolved against the
+    // layout viewport — mixing window.innerHeight with rect coordinates pushed
+    // the bar below the visible screen on phones. Anchor to the visual viewport.
+    const vv = window.visualViewport;
+    const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
+    const visibleBottom = vv ? vv.offsetTop + vv.height : layoutHeight;
+    const barBottom = Math.min(rect.bottom, visibleBottom);
     bar.style.left = `${rect.left}px`;
     bar.style.width = `${rect.width}px`;
-    bar.style.bottom = `${Math.max(0, window.innerHeight - rect.bottom)}px`;
+    bar.style.bottom = `${Math.max(0, layoutHeight - barBottom)}px`;
 }
 
 /**
@@ -705,12 +729,15 @@ function wireEvents() {
             syncChatSpacer();
         }
     });
-    window.visualViewport?.addEventListener('resize', () => {
+    const onViewportChange = () => {
         if (barEl && !barEl.classList.contains('cob-hidden')) {
             syncBarGeometry();
             syncChatSpacer();
         }
-    });
+    };
+    window.visualViewport?.addEventListener('resize', onViewportChange);
+    // Fires when the visual viewport pans (mobile URL bar, keyboard, pinch).
+    window.visualViewport?.addEventListener('scroll', onViewportChange);
 
     // Any tap outside the long-press preview dismisses it.
     document.addEventListener('pointerdown', (e) => {
