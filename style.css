@@ -1,25 +1,27 @@
 /* Adventure Choice Buttons — build tag lets debug tooling prove which stylesheet version is applied. */
 :root {
-    --cob-build: '1.2.0';
+    --cob-build: '1.3.0';
 }
 
-/* The docked button bar. Position (left/width/bottom) is synced in JS to the
-   #send_form rect so it always matches the chat width on any screen. */
+/* The docked button bar. Lives in flow inside #form_sheld (the bottom block of
+   the #sheld flex column), right above #send_form — always chat-width and always
+   on screen, on desktop and mobile alike. No JS positioning needed. */
 #cob-bar {
-    position: fixed;
-    /* Above the chat/send-form stacking contexts on mobile, below core popups. */
-    z-index: 1000;
+    position: relative;
+    width: 100%;
+    margin: 0 0 6px 0;
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
     gap: 6px;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 8px;
     box-sizing: border-box;
+    white-space: normal; /* #form_sheld sets nowrap */
     background: rgba(18, 18, 24, 0.88);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 12px 12px 0 0;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
     color: var(--SmartThemeBodyColor, #eee);
     font-family: var(--mainFontFamily, inherit);
 }
@@ -143,18 +145,10 @@ body.cob-hide-input #send_form {
     opacity: 0.6;
 }
 
-/* Spacer appended at the end of #chat so the last message can scroll clear
-   of the bar when the bar is taller than the stock send form. */
-#cob-spacer {
-    flex: 0 0 auto;
-    width: 100%;
-    pointer-events: none;
-}
-
 @media screen and (max-width: 600px) {
     #cob-bar {
         gap: 5px;
-        padding: 5px 6px calc(5px + env(safe-area-inset-bottom, 0px));
+        padding: 5px 6px;
     }
 
     .cob-opt {

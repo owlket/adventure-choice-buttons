@@ -1,9 +1,8 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.2.0';
+const BUILD_ID = '1.3.0';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
-const SPACER_ID = 'cob-spacer';
 const PREVIEW_ID = 'cob-preview';
 const LONG_PRESS_MS = 500;
 const MAX_OPTIONS = 12;
@@ -368,7 +367,15 @@ function doStop() {
 }
 
 function openOptionsMenu() {
-    nativeClick(document.getElementById('options_button'));
+    const button = document.getElementById('options_button');
+    if (!button) return;
+    // Core script.js closes the options popup on any document click unless the
+    // button or popup is :hover/:focus (isMouseOverButtonOrMenu). A synthetic
+    // click has neither — the pointer rests on OUR button — so the popup opened
+    // and the very same click immediately closed it. Focus the real button first.
+    if (!button.hasAttribute('tabindex')) button.setAttribute('tabindex', '-1');
+    button.focus({ preventScroll: true });
+    nativeClick(button);
 }
 
 function openExtensionsMenu() {
@@ -483,7 +490,18 @@ function ensureBar() {
     barEl = document.createElement('div');
     barEl.id = BAR_ID;
     barEl.className = 'cob-hidden';
-    document.body.appendChild(barEl);
+    // Dock INSIDE #form_sheld (the bottom block of the #sheld flex column), right
+    // above #send_form. Pure flow layout: always chat-width, always on screen —
+    // no fixed-position/viewport math that breaks on mobile browsers.
+    const sheld = document.getElementById('form_sheld');
+    const form = document.getElementById('send_form');
+    if (sheld && form) {
+        sheld.insertBefore(barEl, form);
+    } else if (document.body) {
+        // Degraded fallback: fixed to the bottom of the page.
+        barEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:1000;';
+        document.body.appendChild(barEl);
+    }
     return barEl;
 }
 
@@ -523,27 +541,8 @@ function renderBar() {
 
 
 /* ------------------------------------------------------------------------- */
-/* Geometry, input hiding, chat spacer                                       */
+/* Input hiding                                                              */
 /* ------------------------------------------------------------------------- */
-
-/** Pin the bar to the #send_form rect so it always matches the chat width. */
-function syncBarGeometry() {
-    const bar = ensureBar();
-    const form = document.getElementById('send_form');
-    if (!form) return;
-    const rect = form.getBoundingClientRect();
-    // Mobile browsers: the layout viewport can be taller than the visible area
-    // (URL bar / gesture bar) while position:fixed is resolved against the
-    // layout viewport — mixing window.innerHeight with rect coordinates pushed
-    // the bar below the visible screen on phones. Anchor to the visual viewport.
-    const vv = window.visualViewport;
-    const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
-    const visibleBottom = vv ? vv.offsetTop + vv.height : layoutHeight;
-    const barBottom = Math.min(rect.bottom, visibleBottom);
-    bar.style.left = `${rect.left}px`;
-    bar.style.width = `${rect.width}px`;
-    bar.style.bottom = `${Math.max(0, layoutHeight - barBottom)}px`;
-}
 
 /**
  * Hide/show the core message bar. Uses visibility (not display) so the form
@@ -558,23 +557,6 @@ function applyInputVisibility() {
     document.body.classList.toggle('cob-hide-input', shouldHide);
 }
 
-/**
- * Keep the last message scrollable clear of the bar: when the bar is taller
- * than the stock send form, add a spacer at the end of #chat for the difference.
- */
-function syncChatSpacer() {
-    const chat = document.getElementById('chat');
-    const form = document.getElementById('send_form');
-    document.getElementById(SPACER_ID)?.remove();
-    if (!chat || !form || !barEl || barEl.classList.contains('cob-hidden')) return;
-    const extra = barEl.offsetHeight - form.offsetHeight;
-    if (extra <= 0) return;
-    const spacer = document.createElement('div');
-    spacer.id = SPACER_ID;
-    spacer.style.height = `${extra + 8}px`;
-    chat.appendChild(spacer);
-}
-
 /* ------------------------------------------------------------------------- */
 /* Refresh                                                                   */
 /* ------------------------------------------------------------------------- */
@@ -587,7 +569,6 @@ function refresh() {
         currentOptions = [];
         ensureBar().classList.add('cob-hidden');
         applyInputVisibility();
-        syncChatSpacer();
         return;
     }
 
@@ -600,16 +581,12 @@ function refresh() {
     if (!currentOptions.length) {
         bar.classList.add('cob-hidden');
         applyInputVisibility();
-        syncChatSpacer();
         return;
     }
 
     renderBar();
-    syncBarGeometry();
     bar.classList.remove('cob-hidden');
     applyInputVisibility();
-    // The spacer must be re-appended after core appends new message nodes.
-    requestAnimationFrame(syncChatSpacer);
 }
 
 function scheduleRefresh() {
@@ -722,22 +699,8 @@ function wireEvents() {
     eventSource.on(event_types.GENERATION_ENDED, onGenerationFinished);
     eventSource.on(event_types.GENERATION_STOPPED, onGenerationFinished);
 
-    // Keep the bar pinned to the send form across resizes / mobile viewport changes.
-    window.addEventListener('resize', () => {
-        if (barEl && !barEl.classList.contains('cob-hidden')) {
-            syncBarGeometry();
-            syncChatSpacer();
-        }
-    });
-    const onViewportChange = () => {
-        if (barEl && !barEl.classList.contains('cob-hidden')) {
-            syncBarGeometry();
-            syncChatSpacer();
-        }
-    };
-    window.visualViewport?.addEventListener('resize', onViewportChange);
-    // Fires when the visual viewport pans (mobile URL bar, keyboard, pinch).
-    window.visualViewport?.addEventListener('scroll', onViewportChange);
+    // The bar docks in flow inside #form_sheld, so there is no geometry to keep
+    // in sync across resizes / mobile viewport changes — nothing to do here.
 
     // Any tap outside the long-press preview dismisses it.
     document.addEventListener('pointerdown', (e) => {
