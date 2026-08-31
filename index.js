@@ -1,6 +1,6 @@
 const MODULE_NAME = 'adventure-choice-buttons';
 /** Build marker shown in logs; also used as the stylesheet cache-buster (same trick as adventure-launcher — mobile browsers hold stale CSS for a long time). */
-const BUILD_ID = '1.5.1';
+const BUILD_ID = '1.6.0';
 const STYLESHEET_LINK_ID = 'adventure-choice-buttons-css';
 const BAR_ID = 'cob-bar';
 const PREVIEW_ID = 'cob-preview';
@@ -56,6 +56,8 @@ let manualInputVisible = false;
 let refreshTimer = null;
 /** @type {HTMLElement|null} */
 let barEl = null;
+/** @type {string|null} Message tail of the last rejection we already warned about (dedup). */
+let lastRejectedTail = null;
 
 /* ------------------------------------------------------------------------- */
 /* Stylesheet (cache-busted, same hardening as adventure-launcher)           */
@@ -159,16 +161,55 @@ function persistSettings() {
 /* Choice parsing                                                            */
 /* ------------------------------------------------------------------------- */
 
-/** A numbered list item: "1. ...", "2) ...", optionally after a markdown bullet ("- 1. ..."). */
-const ITEM_RE = /^\s{0,3}(?:[-*+]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
+/** A numbered list item: "1. ...", "2) ...", "1、...", optionally after a markdown bullet
+ *  ("- 1. ...") and optionally with the number wrapped in emphasis ("**1.** ...", "**1. ...**").
+ *  The separator may be followed directly by a CJK glyph with no space ("1.前进" — common in
+ *  Chinese worlds); anything else still requires whitespace so "1.5 volts" never parses as
+ *  an option. Applied to width-normalized text (see matchItemLine). */
+const ITEM_RE = /^\s{0,3}(?:[-*+]\s*)?(?:\*\*|__|\*)?(\d{1,2})[.)、](?:\*\*|__)?(?:\s+(?=\S)|(?=[一-鿿]))(.+)$/;
+/** Parenthesized numbering: "(1) ..." and fullwidth "（１）..." (the latter after width normalization). */
+const ITEM_PAREN_RE = /^\s{0,3}(?:\*\*|__|\*)?\((\d{1,2})\)(?:\*\*|__)?(?:\s+(?=\S)|(?=[一-鿿]))(.+)$/;
 /** Horizontal-rule-only lines are allowed after the option run. */
 const HR_RE = /^\s*([-*_]\s*){3,}$/;
 /** A line that reads like a fresh "what do you do?" prompt rather than option text. Leading emphasis/parens allowed ("(Select 1-6, ...)", "*What do you do?*"). */
 const PROMPT_LINE_RE = /^[*_(\s]*(?:select|choose|pick|what (?:do|will) you|your (?:move|choice|action|decision))\b/i;
 /** A line that is only embedded media (image markdown / <img>), e.g. attached by an image-gen extension. */
 const MEDIA_LINE_RE = /^(?:\s*(?:!\[[^\]]*\]\([^)]*\)|<img\b[^>]*>)\s*)+$/i;
-/** A bracketed directive line such as [SCENE_CHANGE] that media hooks leave after the list. */
-const DIRECTIVE_RE = /^\s*\[[^\]\n]{1,60}\]\s*$/;
+/** A bracketed directive line such as [SCENE_CHANGE] or 【状态更新】 that hooks leave after the list. */
+const DIRECTIVE_RE = /^\s*(?:\[[^\]\n]{1,60}\]|【[^】\n]{1,60}】)\s*$/;
+/** A markdown table row ("| 楼层 | 7 |", "| --- | --- |") — stat blocks often sit below the list. */
+const TABLE_LINE_RE = /^\s*\|.*\|\s*$/;
+/** A line that is a single XML-style tag pair ("<理智>76/100</理智>") — state trackers append these. */
+const XML_TAG_LINE_RE = /^\s*<[A-Za-z一-鿿][^>\n]*>[\s\S]*<\/[A-Za-z一-鿿][^>\n]*>\s*$/;
+
+/** Map fullwidth digits/punctuation to ASCII. Every replacement is one code unit for one
+ *  code unit, so match offsets still line up with the original string. */
+function normalizeWidth(s) {
+    return String(s)
+        .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+        .replace(/．/g, '.')
+        .replace(/（/g, '(')
+        .replace(/）/g, ')');
+}
+
+/** Match a numbered list item, tolerating fullwidth digits/punctuation ("１．…", "（２）…")
+ *  and emphasis-wrapped numbers. Returns { num, firstLine } with firstLine sliced from the
+ *  ORIGINAL line (fullwidth characters preserved in the text sent on tap). */
+function matchItemLine(line) {
+    const norm = normalizeWidth(line);
+    const m = norm.match(ITEM_RE) || norm.match(ITEM_PAREN_RE);
+    if (!m) return null;
+    // m[2] is the normalized tail; widths map 1:1, so its length slices the original line.
+    let firstLine = line.slice(line.length - m[2].length);
+    // A line-wide emphasis wrap ("**1. text**") leaves its trailing closer on the tail —
+    // strip it only when the number itself was preceded by emphasis; a paired wrap inside
+    // the text ("6. **Submit Classification**") keeps its markers for extractLabel.
+    if (/^\s{0,3}(?:[-*+]\s*)?(?:\*\*|__|\*)/.test(norm)) {
+        firstLine = firstLine.replace(/[\s*_]+$/, '');
+    }
+    if (!firstLine) return null;
+    return { num: Number(m[1]), firstLine };
+}
 
 /**
  * A trailing status line injected by stat trackers, e.g.
@@ -189,8 +230,12 @@ function isStatusLine(line, statusRe = null) {
 
 /** Lines that never count as narration when deciding what follows the option run. */
 function isSkippableLine(line, statusRe = null) {
-    return line.trim() === '' || HR_RE.test(line) || MEDIA_LINE_RE.test(line) || DIRECTIVE_RE.test(line) || isStatusLine(line, statusRe);
+    return line.trim() === '' || HR_RE.test(line) || MEDIA_LINE_RE.test(line) || DIRECTIVE_RE.test(line)
+        || TABLE_LINE_RE.test(line) || XML_TAG_LINE_RE.test(line) || isStatusLine(line, statusRe);
 }
+
+/** Diagnostic: why the last parse attempt produced no options (read by refresh()'s warning). */
+let lastRejectReason = '';
 
 /** Strip markdown inline formatting so button labels and sent text stay clean. */
 function cleanInline(s) {
@@ -245,17 +290,26 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false, statusRe 
     // All numbered item starts up to `end`.
     const starts = [];
     for (let k = 0; k <= end; k++) {
-        const m = lines[k].match(ITEM_RE);
-        if (m) starts.push({ idx: k, num: Number(m[1]), firstLine: m[2] });
+        const m = matchItemLine(lines[k]);
+        if (m) starts.push({ idx: k, num: m.num, firstLine: m.firstLine });
     }
-    if (!starts.length) return [];
+    if (!starts.length) {
+        lastRejectReason = 'no numbered items found before the last content line';
+        return [];
+    }
 
     // The trailing run = longest suffix of `starts` with sequential numbers.
     let runBegin = starts.length - 1;
     while (runBegin > 0 && starts[runBegin - 1].num === starts[runBegin].num - 1) runBegin--;
     const run = starts.slice(runBegin);
-    if (run.length < minOptions || run.length > MAX_OPTIONS) return [];
-    if (run[0].num !== 1) return [];
+    if (run.length < minOptions || run.length > MAX_OPTIONS) {
+        lastRejectReason = `trailing run has ${run.length} sequential item(s), need ${minOptions}-${MAX_OPTIONS}`;
+        return [];
+    }
+    if (run[0].num !== 1) {
+        lastRejectReason = `trailing run starts at ${run[0].num}, not 1`;
+        return [];
+    }
 
     const options = [];
     let lastContentLine = -1; // last line index that belongs to the final item
@@ -286,12 +340,18 @@ function parseChoices(raw, minOptions, allowTrailingNarrative = false, statusRe 
     // ENDS by asking for a choice, or while streaming (the prompt may not have
     // arrived yet — rejecting here is what made the bar flash and vanish).
     let sawNarrative = false;
+    let offender = '';
     for (let k = lastContentLine + 1; k <= end; k++) {
         const t = lines[k].trim();
         if (isSkippableLine(lines[k], statusRe) || PROMPT_LINE_RE.test(t)) continue;
+        if (!offender) offender = t;
         sawNarrative = true;
     }
-    if (sawNarrative && !allowTrailingNarrative && !PROMPT_LINE_RE.test(lines[end].trim())) return [];
+    if (sawNarrative && !allowTrailingNarrative && !PROMPT_LINE_RE.test(lines[end].trim())) {
+        lastRejectReason = `non-skippable content after the list: ${JSON.stringify(offender.slice(0, 120))}`;
+        return [];
+    }
+    lastRejectReason = '';
     return options;
 }
 
@@ -628,10 +688,16 @@ function refresh() {
     // list — the closing "what do you do?" prompt may not have arrived yet.
     currentOptions = raw ? parseChoices(raw, Math.max(2, Number(settings.minOptions) || 2), generating, getStatusLineRe()) : [];
 
-    // Diagnostic: a numbered run exists but was rejected — log the message tail
-    // so users can report exactly what follows the list (open the console).
-    if (raw && !currentOptions.length && /^\s{0,3}\d{1,2}[.)]\s+\S/m.test(raw)) {
-        console.debug(`[${MODULE_NAME}] Choice-looking list was rejected. Message tail:`, JSON.stringify(raw.slice(-300)));
+    // Diagnostic: a numbered run exists but was rejected — warn (console.debug is
+    // hidden behind "Verbose" in DevTools, so use warn) with the exact reason and
+    // the message tail, so users can report what follows the list. Only once per
+    // distinct tail — refresh() fires on every stream chunk.
+    if (raw && !currentOptions.length && /^\s{0,3}(?:[-*+]\s*)?(?:\*\*|__|\*)?[（(]?[0-9０-９]{1,2}[.)、．）]/m.test(raw)) {
+        const tail = raw.slice(-300);
+        if (tail !== lastRejectedTail) {
+            lastRejectedTail = tail;
+            console.warn(`[${MODULE_NAME}] Choice-looking list was rejected (${lastRejectReason || 'unknown reason'}). Message tail:`, JSON.stringify(tail));
+        }
     }
 
     const bar = ensureBar();
@@ -671,7 +737,7 @@ function buildSettingsPanel() {
     <div class="adventure-choice-buttons-settings">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>Adventure Choice Buttons</b>
+                <b>Adventure Choice Buttons</b> <small style="opacity:0.6;">build ${BUILD_ID}</small>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">

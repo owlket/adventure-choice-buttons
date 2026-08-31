@@ -213,5 +213,50 @@ check('empty text is media-only', isMediaOnlyText(''), true);
 check('caption + image is NOT media-only', isMediaOnlyText('Look at this: ![img](x.png)'), false);
 check('plain narration is NOT media-only', isMediaOnlyText('The door creaks open.'), false);
 
+// --- Case 22: Chinese-world numbering variants (reported: generated choice text not detected) ---
+const msgCnBold = `剧情。\n\n**1. 给苏晚回消息，把自己描述成一个废物。**\n**2. 回电房东王叔，指着他的鼻子骂。**\n**3. 十点整走进副总裁办公室。**\n**4. 自己写一个行动。**`;
+const r22 = parseChoices(msgCnBold, 2);
+check('bold-wrapped option lines: detected', r22.length, 4);
+check('bold-wrapped: option 1 label', r22[0]?.label, '给苏晚回消息，把自己描述成一个废物。');
+
+const msgCnBoldNum = `剧情。\n\n**1.** 给苏晚回消息。\n**2.** 回电房东王叔。\n**3.** 走进办公室。`;
+const r22b = parseChoices(msgCnBoldNum, 2);
+check('bold number prefix: detected', r22b.length, 3);
+check('bold number prefix: option 2 text', r22b[1]?.text, '回电房东王叔。');
+
+const msgFullwidth = `剧情。\n\n１．给苏晚回消息\n２．回电房东王叔\n３．走进办公室`;
+const rFw = parseChoices(msgFullwidth, 2);
+check('fullwidth digits: detected', rFw.length, 3);
+check('fullwidth digits: numbers normalized', rFw.map(o => o.number), [1, 2, 3]);
+check('fullwidth digits: text keeps original characters', rFw[0]?.text, '给苏晚回消息');
+
+const msgCnParen = `剧情。\n\n（1）前进\n（2）撤退\n（3）搜索`;
+check('fullwidth paren numbering: detected', parseChoices(msgCnParen, 2).length, 3);
+
+const msgCnNoSpace = `剧情。\n\n1、前进\n2、撤退\n3、搜索`;
+check('ideographic comma without space: detected', parseChoices(msgCnNoSpace, 2).length, 3);
+
+const msgCnTight = `剧情。\n\n1.前进\n2.撤退\n3.搜索`;
+check('CJK directly after period: detected', parseChoices(msgCnTight, 2).length, 3);
+
+const msgDecimals = `Readings keep climbing.\n\n1.5 volts now.\n2.3 amps yesterday.\n3.1 ohms last week.`;
+check('decimal numbers are not options', parseChoices(msgDecimals, 2).length, 0);
+
+// --- Case 23: trailing stat block variants below the list ---
+const msgTable = `剧情。\n\n1. 前进\n2. 撤退\n3. 搜索\n\n| 楼层 | 7 |\n| 发现的客人 | 0 |`;
+check('trailing markdown stat table tolerated', parseChoices(msgTable, 2).length, 3);
+
+const msgXmlTags = `剧情。\n\n1. 前进\n2. 撤退\n3. 搜索\n<理智>76/100</理智>\n<楼层>7</楼层>`;
+check('trailing XML status tags tolerated', parseChoices(msgXmlTags, 2).length, 3);
+
+const msgFwDirective = `1. **A** -- one.\n2. **B** -- two.\n\n【状态更新】`;
+check('fullwidth directive after list tolerated', parseChoices(msgFwDirective, 2).length, 2);
+
+// --- Case 24: PC-screenshot world — loose list (blank line between items) ---
+const msgLoose = `你的钱包在裤兜里贴着大腿，隔着布料。\n\n三个好消息，像三根套索，从三个方向同时收紧。\n\n---\n\n**你的选择：**\n\n1. 给苏晚回消息，把自己描述成一个无可救药的油腻废物。\n\n2. 回电房东王叔，指着他的鼻子骂退款是"非法操作"。\n\n3. 十点整走进副总裁办公室，当面嘲笑他的发际线。\n\n4. 自己写一个行动。（反正世界不会变得更好了，对吧？）`;
+const r24 = parseChoices(msgLoose, 2);
+check('loose list with blank lines: detected', r24.length, 4);
+check('loose list: option 4 text intact', r24[3]?.text, '自己写一个行动。（反正世界不会变得更好了，对吧？）');
+
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} TEST(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
